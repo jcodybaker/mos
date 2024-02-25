@@ -37,4 +37,5 @@ const (
 	tGCP
 	tWatson
 	tUDP
+	tExternal
 )

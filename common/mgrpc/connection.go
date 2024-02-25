@@ -17,6 +17,7 @@
 package mgrpc
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 
 type connectOptions struct {
 	proto            transport
+	rawConnectURL    string
 	connectAddress   string
 	localID          string
 	serverHost       string
@@ -42,6 +44,7 @@ type connectOptions struct {
 	enableReconnect  bool
 	enableCompatArgs bool
 	codecOptions     codec.Options
+	externalCodec    ExternalCodecConnectFunc
 }
 
 // ConnectOption is an optional argument to Instance.Connect which affects the
@@ -79,16 +82,33 @@ func LocalID(localID string) ConnectOption {
 	}
 }
 
-// connectTo specifies the address used by HTTP_POST and WebSocket transports.
-// Use it if the address automatically inferred from destination address is not
-// suitable (e.g. you're connecting to another network interface of the device).
-//
-// This function is unexported, because mgrpc.New() takes connectAddr as a
-// separate argument.
-func connectTo(connectURL string) ConnectOption {
-	url, err := url.Parse(connectURL)
+// ExternalCodecConnectFunc describes the format of the connection function for an external codec.
+type ExternalCodecConnectFunc func(
+	ctx context.Context,
+	addr string,
+	tlsConfig *tls.Config,
+) (codec.Codec, error)
+
+// UseExternalCodec sets an external codec
+func UseExternalCodec(ext ExternalCodecConnectFunc) ConnectOption {
+	return func(c *connectOptions) error {
+		c.externalCodec = ext
+		return nil
+	}
+}
+
+// processRawConnectURL parses and validates the connectURL provided to New().
+func (c *connectOptions) processRawConnectURL() error {
+	if c.externalCodec != nil {
+		// externalCodecs can parse their own connect address
+		c.proto = tExternal
+		c.connectAddress = c.rawConnectURL
+		return nil
+	}
+
+	url, err := url.Parse(c.rawConnectURL)
 	if err != nil {
-		return badConnectOption(errors.Errorf("invalid ConnectTo format: %s", err))
+		return errors.Errorf("invalid ConnectTo format: %s", err)
 	}
 	var t transport
 	var a string
@@ -124,14 +144,12 @@ func connectTo(connectURL string) ConnectOption {
 	case url.Scheme == codec.UDPURLScheme:
 		t, a = tUDP, url.Host
 	default:
-		return badConnectOption(errors.Errorf("invalid ConnectTo protocol %q", url.Scheme))
+		return errors.Errorf("invalid ConnectTo protocol %q", url.Scheme)
 	}
-	return func(c *connectOptions) error {
-		c.proto = t
-		c.connectAddress = a
-		c.useTLS = tls
-		return nil
-	}
+	c.proto = t
+	c.connectAddress = a
+	c.useTLS = tls
+	return nil
 }
 
 // ClientCert specifies the client certificate chain to supply to the server

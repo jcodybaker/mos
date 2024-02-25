@@ -98,7 +98,10 @@ func (e ErrorResponse) Error() string {
 
 func New(ctx context.Context, connectAddr string, opts ...ConnectOption) (MgRPC, error) {
 
-	opts = append(opts, connectTo(connectAddr))
+	opts = append(opts, func(co *connectOptions) error {
+		co.rawConnectURL = connectAddr
+		return nil
+	})
 
 	rpc := mgRPCImpl{
 		reqs:     make(map[int64]req),
@@ -232,6 +235,10 @@ func (r *mgRPCImpl) connect(ctx context.Context, opts ...ConnectOption) error {
 		}
 	}
 
+	if err := r.opts.processRawConnectURL(); err != nil {
+		return err
+	}
+
 	glog.V(1).Infof("Connecting to %s over %s", r.opts.connectAddress, r.opts.proto)
 
 	switch r.opts.proto {
@@ -296,7 +303,14 @@ func (r *mgRPCImpl) connect(ctx context.Context, opts ...ConnectOption) error {
 				c, err := r.watsonConnect(url, r.opts)
 				return c, errors.Trace(err)
 			})
-
+	case tExternal:
+		if r.codec, err = r.opts.externalCodec(
+			ctx,
+			r.opts.connectAddress,
+			r.opts.tlsConfig,
+		); err != nil {
+			return errors.Trace(err)
+		}
 	default:
 		return fmt.Errorf("unknown transport %q", r.opts.proto)
 	}
